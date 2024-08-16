@@ -7,7 +7,9 @@ import torch
 import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
+from torch.autograd import Variable
 import torch.utils.model_zoo as model_zoo
+
 
 __all__ = ['MLP', 'Inception3', 'inception_v3', 'End2EndModel']
 
@@ -20,21 +22,30 @@ model_urls = {
 
 
 class End2EndModel(torch.nn.Module):
-    def __init__(self, model1, model2, use_relu=False, use_sigmoid=False, n_class_attr=2):
+    def __init__(self, model1, model2, use_relu=False, use_sigmoid=False, use_gbsm=False, expand_gbsm_dim=False, n_class_attr=2):
         super(End2EndModel, self).__init__()
         self.first_model = model1
         self.sec_model = model2
         self.use_relu = use_relu
         self.use_sigmoid = use_sigmoid
+        self.use_gbsm = use_gbsm
+        self.expand_gbsm_dim = expand_gbsm_dim
 
     def forward_stage2(self, stage1_out):
         if self.use_relu:
             attr_outputs = [nn.ReLU()(o) for o in stage1_out]
         elif self.use_sigmoid:
-            attr_outputs = [torch.nn.Sigmoid()(o) for o in stage1_out]
+            if self.use_gbsm and self.expand_gbsm_dim:
+                attr_outputs = [(torch.nn.LogSigmoid()(o), torch.nn.LogSigmoid()(-o)) for o in stage1_out]
+                attr_outputs = [F.gumbel_softmax(Variable(torch.stack([op, on], dim=-1)), tau=0.001, hard=True, eps=1e-10, dim=-1).to(torch.float32).squeeze(1) for op, on in attr_outputs]
+            elif self.use_gbsm and not self.expand_gbsm_dim:
+                attr_outputs = [(torch.nn.LogSigmoid()(o), torch.nn.LogSigmoid()(-o)) for o in stage1_out]
+                attr_outputs = [F.gumbel_softmax(Variable(torch.stack([op, on], dim=-1)), tau=0.001, hard=True, eps=1e-10, dim=-1)[:, :, 0].to(torch.float32) for op, on in attr_outputs]
+            else:
+                attr_outputs = [torch.nn.Sigmoid()(o) for o in stage1_out]
         else:
             attr_outputs = stage1_out
-
+            
         stage2_inputs = attr_outputs
         stage2_inputs = torch.cat(stage2_inputs, dim=1)
         all_out = [self.sec_model(stage2_inputs)]
@@ -44,7 +55,9 @@ class End2EndModel(torch.nn.Module):
     def forward(self, x):
         if self.first_model.training:
             outputs, aux_outputs = self.first_model(x)
-            return self.forward_stage2(outputs), self.forward_stage2(aux_outputs)
+            sec_model_outputs = self.forward_stage2(outputs)
+            sec_model_aux_outputs = self.forward_stage2(aux_outputs)
+            return sec_model_outputs, sec_model_aux_outputs
         else:
             outputs = self.first_model(x)
             return self.forward_stage2(outputs)
@@ -112,6 +125,7 @@ class Inception3(nn.Module):
         three_class: whether to count not visible as a separate class for predicting attribute
         """
         super(Inception3, self).__init__()
+        self.num_classes = num_classes
         self.aux_logits = aux_logits
         self.transform_input = transform_input
         self.n_attributes = n_attributes
@@ -139,6 +153,7 @@ class Inception3(nn.Module):
         self.all_fc = nn.ModuleList() #separate fc layer for each prediction task. If main task is involved, it's always the first fc in the list
 
         if connect_CY:
+            print('connecting CY FC')
             self.cy_fc = FC(n_attributes, num_classes, expand_dim)
         else:
             self.cy_fc = None

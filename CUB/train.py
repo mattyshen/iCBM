@@ -14,7 +14,7 @@ from analysis import Logger, AverageMeter, accuracy, binary_accuracy
 
 from CUB import probe, tti, gen_cub_synthetic, hyperopt
 from CUB.dataset import load_data, find_class_imbalance
-from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES, UPWEIGHT_RATIO, MIN_LR, LR_DECAY_SIZE
+from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES, UPWEIGHT_RATIO, MIN_LR, LR_DECAY_SIZE, DEVICE, set_device, get_device
 from CUB.models import ModelXtoCY, ModelXtoChat_ChatToY, ModelXtoY, ModelXtoC, ModelOracleCtoY, ModelXtoCtoY
 
 
@@ -32,10 +32,10 @@ def run_epoch_simple(model, optimizer, loader, loss_meter, acc_meter, criterion,
             #inputs = [i.long() for i in inputs]
             inputs = torch.stack(inputs).t().float()
         inputs = torch.flatten(inputs, start_dim=1).float()
-        inputs_var = torch.autograd.Variable(inputs).cuda()
-        inputs_var = inputs_var.cuda() if torch.cuda.is_available() else inputs_var
-        labels_var = torch.autograd.Variable(labels).cuda()
-        labels_var = labels_var.cuda() if torch.cuda.is_available() else labels_var
+        inputs_var = torch.autograd.Variable(inputs).to(get_device())
+        inputs_var = inputs_var.to(get_device()) if torch.cuda.is_available() else inputs_var
+        labels_var = torch.autograd.Variable(labels).to(get_device())
+        labels_var = labels_var.to(get_device()) if torch.cuda.is_available() else labels_var
         
         outputs = model(inputs_var)
         loss = criterion(outputs, labels_var)
@@ -72,12 +72,13 @@ def run_epoch(model, optimizer, loader, loss_meter, acc_meter, criterion, attr_c
                     attr_labels = attr_labels[0]
                 attr_labels = attr_labels.unsqueeze(1)
             attr_labels_var = torch.autograd.Variable(attr_labels).float()
-            attr_labels_var = attr_labels_var.cuda() if torch.cuda.is_available() else attr_labels_var
+            attr_labels_var = attr_labels_var.to(get_device()) if torch.cuda.is_available() else attr_labels_var
 
         inputs_var = torch.autograd.Variable(inputs)
-        inputs_var = inputs_var.cuda() if torch.cuda.is_available() else inputs_var
+        inputs_var = inputs_var.to(get_device()) if torch.cuda.is_available() else inputs_var
         labels_var = torch.autograd.Variable(labels)
-        labels_var = labels_var.cuda() if torch.cuda.is_available() else labels_var
+        labels_var = labels_var.to(get_device()) if torch.cuda.is_available() else labels_var
+        labels = labels.to(get_device()) if torch.cuda.is_available() else labels
 
         if is_training and args.use_aux:
             outputs, aux_outputs = model(inputs_var)
@@ -108,7 +109,7 @@ def run_epoch(model, optimizer, loader, loss_meter, acc_meter, criterion, attr_c
             acc = binary_accuracy(sigmoid_outputs, attr_labels)
             acc_meter.update(acc.data.cpu().numpy(), inputs.size(0))
         else:
-            acc = accuracy(outputs[0], labels, topk=(1,)) #only care about class prediction accuracy
+            acc = accuracy(outputs[0], labels.to(get_device()), topk=(1,)) #only care about class prediction accuracy
             acc_meter.update(acc[0], inputs.size(0))
 
         if attr_criterion is not None:
@@ -129,6 +130,9 @@ def run_epoch(model, optimizer, loader, loss_meter, acc_meter, criterion, attr_c
 
 def train(model, args):
     # Determine imbalance
+    print(f'using bottleneck?: {args.bottleneck}')
+    print(f'using sigmoid?: {args.use_sigmoid}')
+    print(f'ckpt?: {args.ckpt}')
     imbalance = None
     if args.use_attr and not args.no_img and args.weighted_loss:
         train_data_path = os.path.join(BASE_DIR, args.data_dir, 'train.pkl')
@@ -136,7 +140,7 @@ def train(model, args):
             imbalance = find_class_imbalance(train_data_path, True)
         else:
             imbalance = find_class_imbalance(train_data_path, False)
-
+    #args.log_dir = '/home/mattyshen/iCBM/CUB/best_model'
     if os.path.exists(args.log_dir): # job restarted by cluster
         for f in os.listdir(args.log_dir):
             os.remove(os.path.join(args.log_dir, f))
@@ -146,16 +150,18 @@ def train(model, args):
     logger = Logger(os.path.join(args.log_dir, 'log.txt'))
     logger.write(str(args) + '\n')
     logger.write(str(imbalance) + '\n')
+    print(f'length of imbalance: {len(imbalance)}')
     logger.flush()
 
-    model = model.cuda()
+    model = model.to(get_device())
+
     criterion = torch.nn.CrossEntropyLoss()
     if args.use_attr and not args.no_img:
         attr_criterion = [] #separate criterion (loss function) for each attribute
         if args.weighted_loss:
             assert(imbalance is not None)
             for ratio in imbalance:
-                attr_criterion.append(torch.nn.BCEWithLogitsLoss(weight=torch.FloatTensor([ratio]).cuda()))
+                attr_criterion.append(torch.nn.BCEWithLogitsLoss(weight=torch.FloatTensor([ratio]).to(get_device())))
         else:
             for i in range(args.n_attributes):
                 attr_criterion.append(torch.nn.CrossEntropyLoss())
@@ -175,7 +181,9 @@ def train(model, args):
 
     train_data_path = os.path.join(BASE_DIR, args.data_dir, 'train.pkl')
     val_data_path = train_data_path.replace('train.pkl', 'val.pkl')
+    
     logger.write('train data path: %s\n' % train_data_path)
+    logger.write('val data path: %s\n' % val_data_path)
 
     if args.ckpt: #retraining
         train_loader = load_data([train_data_path, val_data_path], args.use_attr, args.no_img, args.batch_size, args.uncertain_labels, image_dir=args.image_dir, \
@@ -263,7 +271,8 @@ def train_Chat_to_y_and_test_on_Chat(args):
 def train_X_to_C_to_y(args):
     model = ModelXtoCtoY(n_class_attr=args.n_class_attr, pretrained=args.pretrained, freeze=args.freeze,
                          num_classes=N_CLASSES, use_aux=args.use_aux, n_attributes=args.n_attributes,
-                         expand_dim=args.expand_dim, use_relu=args.use_relu, use_sigmoid=args.use_sigmoid)
+                         expand_dim=args.expand_dim, use_relu=args.use_relu, use_sigmoid=args.use_sigmoid, 
+                         use_gbsm=args.use_gbsm, expand_gbsm_dim=args.expand_gbsm_dim)
     train(model, args)
 
 def train_X_to_y(args):
@@ -339,7 +348,7 @@ def parse_arguments(experiment):
         parser.add_argument('-n_class_attr', type=int, default=2,
                             help='whether attr prediction is a binary or triary classification')
         parser.add_argument('-data_dir', default='official_datasets', help='directory to the training data')
-        parser.add_argument('-image_dir', default='images', help='test image folder to run inference on')
+        parser.add_argument('-image_dir', default=f'{BASE_DIR}/CUB_200_2011', help='test image folder to run inference on')
         parser.add_argument('-resampling', help='Whether to use resampling', action='store_true')
         parser.add_argument('-end2end', action='store_true',
                             help='Whether to train X -> A -> Y end to end. Train cmd is the same as cotraining + this arg')
@@ -355,8 +364,18 @@ def parse_arguments(experiment):
         parser.add_argument('-use_sigmoid', action='store_true',
                             help='Whether to include sigmoid activation before using attributes to predict Y. '
                                  'For end2end & bottleneck model')
+        parser.add_argument('-use_gbsm', action='store_true',
+                            help='Whether to use Gumbel Softmax before using attributes to predict Y. '
+                                 'For end2end & bottleneck model')
+        parser.add_argument('-expand_gbsm_dim', action='store_true',
+                            help='Whether to expand the GBSM dimension instead of slicing the P(c_hat_i) = 1 column - try argmax as an alt perhaps.')
         parser.add_argument('-connect_CY', action='store_true',
                             help='Whether to use concepts as auxiliary features (in multitasking) to predict Y')
+        parser.add_argument('-gpu', type=int, default=2,
+                            help='GPU ID to use for training, inference, etc.')
         args = parser.parse_args()
+        
+        set_device(args.gpu)
+        
         args.three_class = (args.n_class_attr == 3)
         return (args,)

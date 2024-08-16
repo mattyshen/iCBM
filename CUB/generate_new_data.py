@@ -15,7 +15,7 @@ import torchvision.transforms as transforms
 from collections import defaultdict as ddict
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from CUB.config import N_ATTRIBUTES, N_CLASSES
+from CUB.config import N_ATTRIBUTES, N_CLASSES, DEVICE, get_device
 
 
 def get_few_shot_data(n_samples, out_dir, data_file='train.pkl'):
@@ -220,7 +220,7 @@ def inference(img_path, model, use_relu, use_sigmoid, is_train, resol=299, layer
         img_path = '/'.join(img_path_split[:2] + [split] + img_path_split[2:])
     img = Image.open(img_path).convert('RGB')
     img_tensor = transform(img).unsqueeze(0)
-    input_var = torch.autograd.Variable(img_tensor).cuda()
+    input_var = torch.autograd.Variable(img_tensor).to(get_device())
     if layer_idx is not None:
         all_mods = list(model.modules())
         cropped_model = torch.nn.Sequential(*list(model.children())[:layer_idx])  # nn.ModuleList(all_mods[:layer_idx])

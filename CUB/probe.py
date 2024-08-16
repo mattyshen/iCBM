@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 from CUB.models import MLP
 from CUB.dataset import find_class_imbalance
 from analysis import AverageMeter, Logger, binary_accuracy
-from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES, UPWEIGHT_RATIO, MIN_LR, LR_DECAY_SIZE
+from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES, UPWEIGHT_RATIO, MIN_LR, LR_DECAY_SIZE, DEVICE, get_device
 
 
 class LinearProbeDataset(Dataset):
@@ -43,9 +43,9 @@ def run_epoch(model, optimizer, loader, loss_meter, acc_meter, criterion_list, a
         if isinstance(labels, list):
             labels = torch.stack(labels).t().float()
         inputs_var = torch.autograd.Variable(inputs)
-        inputs_var = inputs_var.cuda() if torch.cuda.is_available() else inputs_var
+        inputs_var = inputs_var.to(get_device()) if torch.cuda.is_available() else inputs_var
         labels_var = torch.autograd.Variable(labels)
-        labels_var = labels_var.cuda() if torch.cuda.is_available() else labels_var
+        labels_var = labels_var.to(get_device()) if torch.cuda.is_available() else labels_var
         
         outputs = model(inputs_var)
         #loss
@@ -76,13 +76,13 @@ def linear_probe(args):
     logger.flush()
 
     model = MLP(args.n_attributes, args.n_attributes, expand_dim=None)
-    model = model.cuda() if torch.cuda.is_available() else model
+    model = model.to(get_device()) if torch.cuda.is_available() else model
     #calculate imbalance
     imbalance = find_class_imbalance(os.path.join(BASE_DIR, args.data_dir, 'train.pkl'), True)
     attr_criteria = []
     for ratio in imbalance:
         r = torch.FloatTensor([ratio])
-        r = r.cuda() if torch.cuda.is_available() else r
+        r = r.to(get_device()) if torch.cuda.is_available() else r
         attr_criteria.append(torch.nn.BCEWithLogitsLoss(weight=r))
 
     optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
@@ -154,9 +154,9 @@ def eval_linear_probe(args):
         if isinstance(labels, list):
             labels = torch.stack(labels).t().float()
         inputs_var = torch.autograd.Variable(inputs)
-        inputs_var = inputs_var.cuda() if torch.cuda.is_available() else inputs_var
+        inputs_var = inputs_var.to(get_device()) if torch.cuda.is_available() else inputs_var
         labels_var = torch.autograd.Variable(labels)
-        labels_var = labels_var.cuda() if torch.cuda.is_available() else labels_var
+        labels_var = labels_var.to(get_device()) if torch.cuda.is_available() else labels_var
 
         outputs = model(inputs_var)
         sigmoid_outputs = torch.nn.Sigmoid()(outputs)

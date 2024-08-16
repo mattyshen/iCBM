@@ -11,7 +11,7 @@ from sklearn.metrics import f1_score
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from CUB.dataset import load_data
-from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES
+from CUB.config import BASE_DIR, N_CLASSES, N_ATTRIBUTES, DEVICE, get_device, set_device
 from analysis import AverageMeter, multiclass_metric, accuracy, binary_accuracy
 
 K = [1, 3, 5] #top k class accuracies to compute
@@ -30,6 +30,7 @@ def eval(args):
     """
     if args.model_dir:
         model = torch.load(args.model_dir)
+        
     else:
         model = None
 
@@ -45,6 +46,7 @@ def eval(args):
             model.use_sigmoid = False
     if not hasattr(model, 'cy_fc'):
         model.cy_fc = None
+    model = model.to(get_device())
     model.eval()
 
     if args.model_dir2:
@@ -62,6 +64,7 @@ def eval(args):
                 model2.use_sigmoid = True
             else:
                 model2.use_sigmoid = False
+        model2 = model2.to(get_device())
         model2.eval()
     else:
         model2 = None
@@ -77,10 +80,15 @@ def eval(args):
     class_acc_meter = []
     for j in range(len(K)):
         class_acc_meter.append(AverageMeter())
-
-    data_dir = os.path.join(BASE_DIR, args.data_dir, args.eval_data + '.pkl')
-    loader = load_data([data_dir], args.use_attr, args.no_img, args.batch_size, image_dir=args.image_dir,
-                       n_class_attr=args.n_class_attr)
+    if args.eval_data == 'trainval':
+        train_dir = data_dir = os.path.join(BASE_DIR, args.data_dir, 'train.pkl')
+        val_dir = data_dir = os.path.join(BASE_DIR, args.data_dir, 'val.pkl')
+        loader = load_data([train_dir, val_dir], args.use_attr, args.no_img, args.batch_size, image_dir=args.image_dir,
+                           n_class_attr=args.n_class_attr)
+    else:
+        data_dir = os.path.join(BASE_DIR, args.data_dir, args.eval_data + '.pkl')
+        loader = load_data([data_dir], args.use_attr, args.no_img, args.batch_size, image_dir=args.image_dir,
+                           n_class_attr=args.n_class_attr)
     all_outputs, all_targets = [], []
     all_attr_labels, all_attr_outputs, all_attr_outputs_sigmoid, all_attr_outputs2 = [], [], [], []
     all_class_labels, all_class_outputs, all_class_logits = [], [], []
@@ -100,8 +108,9 @@ def eval(args):
         else:  # simple finetune
             inputs, labels = data
 
-        inputs_var = torch.autograd.Variable(inputs).cuda()
-        labels_var = torch.autograd.Variable(labels).cuda()
+        inputs_var = torch.autograd.Variable(inputs).to(get_device())
+        labels_var = torch.autograd.Variable(labels).to(get_device())
+        labels = labels.to(get_device()) if torch.cuda.is_available() else labels
 
         if args.attribute_group:
             outputs = []
@@ -130,7 +139,7 @@ def eval(args):
                         class_outputs = model2(stage2_inputs)
                     else:  # for debugging bottleneck performance without running stage 2
                         class_outputs = torch.zeros([inputs.size(0), N_CLASSES],
-                                                    dtype=torch.float64).cuda()  # ignore this
+                                                    dtype=torch.float64).to(get_device())  # ignore this
                 else:  # cotraining, end2end
                     if args.use_relu:
                         attr_outputs = [torch.nn.ReLU()(o) for o in outputs[1:]]
@@ -174,8 +183,8 @@ def eval(args):
             class_acc_meter[m].update(class_acc[m], inputs.size(0))
 
     all_class_logits = np.vstack(all_class_logits)
-    topk_class_outputs = np.vstack(topk_class_outputs)
-    topk_class_labels = np.vstack(topk_class_labels)
+    topk_class_outputs = np.vstack([tco if isinstance(tco, np.ndarray) else tco.cpu() for tco in topk_class_outputs])
+    topk_class_labels = np.vstack([tcl if isinstance(tcl, np.ndarray) else tcl.cpu() for tcl in topk_class_labels])
     wrong_idx = np.where(np.sum(topk_class_outputs == topk_class_labels, axis=1) == 0)[0]
 
     for j in range(len(K)):
@@ -245,7 +254,17 @@ if __name__ == '__main__':
     parser.add_argument('-feature_group_results', help='whether to print out performance of individual atttributes', action='store_true')
     parser.add_argument('-use_relu', help='Whether to include relu activation before using attributes to predict Y. For end2end & bottleneck model', action='store_true')
     parser.add_argument('-use_sigmoid', help='Whether to include sigmoid activation before using attributes to predict Y. For end2end & bottleneck model', action='store_true')
+    parser.add_argument('-use_gbsm', action='store_true',
+                            help='Whether to use Gumbel Softmax before using attributes to predict Y. '
+                                 'For end2end & bottleneck model')
+    parser.add_argument('-expand_gbsm_dim', action='store_true',
+                        help='Whether to expand the GBSM dimension instead of slicing the P(c_hat_i) = 1 column - try argmax as an alt perhaps.')
+    parser.add_argument('-gpu', type=int, default=2,
+                        help='GPU ID to use for training, inference, etc.')
     args = parser.parse_args()
+    set_device(args.gpu)
+        
+    args.three_class = (args.n_class_attr == 3)
     args.batch_size = 16
 
     print(args)
@@ -264,5 +283,6 @@ if __name__ == '__main__':
     output_string = '%.4f %.4f %.4f %.4f' % values
     print_string = 'Error of y: %.4f +- %.4f, Error of C: %.4f +- %.4f' % values
     print(print_string)
-    output = open(os.path.join(args.log_dir, 'results.txt'), 'w')
-    output.write(output_string)
+    f = open(os.path.join(args.log_dir, 'results.txt'), "a")
+    f.write(output_string)
+    f.close()

@@ -9,12 +9,12 @@ from scipy.stats import entropy
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from CUB.inference import *
-from CUB.config import N_CLASSES, N_ATTRIBUTES
+from CUB.config import N_CLASSES, N_ATTRIBUTES, DEVICE, get_device
 from CUB.utils import get_class_attribute_names
 
 
 def get_stage2_pred(a_hat):
-    stage2_inputs = torch.from_numpy(np.array(a_hat)).cuda().float()
+    stage2_inputs = torch.from_numpy(np.array(a_hat)).to(get_device()).float()
     class_outputs = model2(stage2_inputs)
     class_outputs = torch.nn.Softmax()(class_outputs)
     return class_outputs.data.cpu().numpy()
@@ -146,12 +146,12 @@ def simulate_group_intervention(mode, replace_val, preds_by_attr, ptl_5, ptl_95,
         model2.eval()
 
         b_attr_new = b_attr_new.reshape(-1, args.n_attributes)
-        stage2_inputs = torch.from_numpy(np.array(b_attr_new)).cuda()
+        stage2_inputs = torch.from_numpy(np.array(b_attr_new)).to(get_device())
         if connect_CY:  # class_outputs is currently contributed by C --> Y
             new_cy_outputs = model2(stage2_inputs)
-            old_stage2_inputs = torch.from_numpy(np.array(b_attr_outputs).reshape(-1, args.n_attributes)).cuda()
+            old_stage2_inputs = torch.from_numpy(np.array(b_attr_outputs).reshape(-1, args.n_attributes)).to(get_device())
             old_cy_outputs = model2(old_stage2_inputs)
-            class_outputs = torch.from_numpy(b_class_logits).cuda() + (new_cy_outputs - old_cy_outputs)
+            class_outputs = torch.from_numpy(b_class_logits).to(get_device()) + (new_cy_outputs - old_cy_outputs)
         else:
             class_outputs = model2(stage2_inputs)
         _, preds = class_outputs.topk(1, 1, True, True)
