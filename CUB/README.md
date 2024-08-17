@@ -1,3 +1,65 @@
+# Distilling CBMs with FIGS / Fourier Transform - CUB Dataset
+("Concept Bottleneck Models - CUB Dataset" README.md from the original CBM GitHub is below)
+
+## Dataset preprocessing
+1) Download the [official CUB dataset](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html) (`CUB_200_2011`), processed CUB data (`CUB_processed`), places365 dataset (`places365`) and pretrained Inception V3 models (`pretrained`) from our [Codalab worksheet](https://worksheets.codalab.org/worksheets/0x362911581fcd4e048ddfd84f47203fd2).   
+
+OR) You can get `CUB_processed` from Step 1. above with the following steps
+1) Run `data_processing.py` to obtain train/ val/ test splits as well as to extract all relevant task and concept metadata into pickle files. 
+2) Run `generate_new_data.py` to obtain other versions of training data (class-level attributes, few-shot training, etc.) from the metadata.
+
+You should have `iCBM/CUB/CUB_200_2011`, `iCBM/CUB/CUB_processed`, and `iCBM/CUB/pretrained`.
+
+## Experiments
+1) Update the paths (e.g. `BASE_DIR`, `-log_dir`, `-out_dir`, `--model_path`) in the scripts (where applicable) to point to your dataset and outputs. Specifically, `BASE_DIR` and `DEVICE` in `CUB/config.py` should be edited appropriately to reflect the compute accessible. `-log_dir` in many of the scripts below starts with  `/home/mattyshen/iCBM/CUB/` and should be edited appropriately.
+2) Run the scripts below to get the results for 1 seed. Change the seed values and corresponding file names to get results for more seeds.
+3) All of the scripts together with different seeds are available in `scripts/experiments.sh`, read it to get a complete picture of the experiments. 
+3) (Optional) Run `hyperparam_tune.py` to perform hyperparameter search for all types of models described in this pape
+
+We are mainly focusing on the Joint model with a sigmoid layer (for intepretability), and for experimentation, a Joint model with a sigmoid layer and a Gumbel Softmax (GBSM) layer to output binary outputs for bird attributes/concepts.
+
+If you are using the trained models on this GitHub, you can skip the training model over three seeds and go to the inference or distillation playground sections.
+
+##### Joint model with a sigmoid layer included between x -> c and c -> y:
+
+Train model over three seeds (1, 2, 3):
+
+1) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 1 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed1/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -gpu 0```
+2) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 2 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed2/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -gpu 0```
+3) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 3 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed3/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -gpu 0```
+
+The ```taskset --cpu-list 61-63``` restricts which CPUs to be used, and can be removed if desired.
+
+##### Joint model with a sigmoid layer and Gumbel Softmax layer included between x -> c and c -> y:
+
+Train model over three seeds (1, 2, 3):
+
+1) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 1 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed1/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -use_gbsm -gpu 2```
+2) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 2 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed2/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -use_gbsm -gpu 2```
+3) ```taskset --cpu-list 61-63 python3 experiments.py cub Joint --seed 3 -ckpt 1 -log_dir /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed3/outputs/ -e 1000 -optimizer sgd -pretrained -use_aux -use_attr -weighted_loss multiple -data_dir CUB_processed/class_attr_data_10 -n_attributes 112 -attr_loss_weight 0.01 -normalize_loss -b 64 -weight_decay 0.0004 -lr 0.001 -scheduler_step 1000 -end2end -use_sigmoid -use_gbsm -gpu 2```
+
+## Inference
+
+Inference on test set when you have 3 seeds of Sigmoid models:
+
+```
+taskset --cpu-list 61-63 python3 inference.py -model_dirs /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed1/outputs/best_model_1.pth /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed2/outputs/best_model_2.pth /home/mattyshen/iCBM/CUB/best_models/Joint0.01SigmoidModel__Seed3/outputs/best_model_3.pth -eval_data test -use_attr -n_attributes 112 -data_dir CUB_processed/class_attr_data_10 -log_dir /home/mattyshen/iCBM/CUB/inference_results/JointSigmoidModels/outputs
+```
+
+Inference on test set when you have 3 seeds of GBSM models:
+
+```
+taskset --cpu-list 61-63 python3 inference.py -model_dirs /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed1/outputs/best_model_1.pth /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed2/outputs/best_model_2.pth /home/mattyshen/iCBM/CUB/best_models/Joint0.01GBSMModel__Seed3/outputs/best_model_3.pth -eval_data test -use_attr -n_attributes 112 -data_dir CUB_processed/class_attr_data_10 -log_dir /home/mattyshen/iCBM/CUB/inference_results/JointGBSMModels/outputs -use_sigmoid -use_gbsm -gpu 2
+```
+Running inference on test sets gets you the numbers in the `CUB/inference_results/JointGBSMModels/outputs/results.txt` or `CUB/inference_results/JointSigmoidModels/outputs/results.txt`.
+
+## Distillation Playground
+
+`inference.ipynb` in `iCBM/CUB` recreates the `inference.py` content in a Jupyter notebook for easy accessibility for model distillation using FIGS or FT Distill.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+
+
 # Concept Bottleneck Models - CUB Dataset
 ## Dataset preprocessing
 1) Download the [official CUB dataset](http://www.vision.caltech.edu/visipedia/CUB-200-2011.html) (`CUB_200_2011`), processed CUB data (`CUB_processed`), places365 dataset (`places365`) and pretrained Inception V3 models (`pretrained`) from our [Codalab worksheet](https://worksheets.codalab.org/worksheets/0x362911581fcd4e048ddfd84f47203fd2).   
