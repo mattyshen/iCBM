@@ -5,6 +5,7 @@ import os
 import torch
 import pickle
 import numpy as np
+import random
 import torchvision.transforms as transforms
 
 from PIL import Image
@@ -18,7 +19,7 @@ class CUBDataset(Dataset):
     Returns a compatible Torch Dataset object customized for the CUB dataset
     """
 
-    def __init__(self, pkl_file_paths, use_attr, no_img, uncertain_label, image_dir, n_class_attr, transform=None):
+    def __init__(self, pkl_file_paths, use_attr, no_img, uncertain_label, image_dir, n_class_attr, transform=None, seed=0):
         """
         Arguments:
         pkl_file_paths: list of full path to all the pkl data
@@ -36,6 +37,7 @@ class CUBDataset(Dataset):
         for file_path in pkl_file_paths:
             self.data.extend(pickle.load(open(file_path, 'rb')))
         self.transform = transform
+        self.seed = seed
         self.use_attr = use_attr
         self.no_img = no_img
         self.uncertain_label = uncertain_label
@@ -49,21 +51,35 @@ class CUBDataset(Dataset):
         img_data = self.data[idx]
         img_path = img_data['img_path']
         # Trim unnecessary paths
+        #print(img_path)
         try:
             idx = img_path.split('/').index('CUB_200_2011')
             if self.image_dir != 'images':
+                #print('image_dir != images')
                 img_path = '/'.join([self.image_dir] + img_path.split('/')[idx+1:])
-                img_path = img_path.replace('images/', '')
+                #img_path = img_path.replace('images/', '')
+                #print(img_path)
             else:
+                #print('image_dir == images')
                 img_path = '/'.join(img_path.split('/')[idx:])
-            img = Image.open(img_path).convert('RGB')
+            try:
+                img = Image.open(img_path).convert('RGB')
+            except:
+                img = Image.open('/home/mattyshen/iCBM/CUB/'+img_path).convert('RGB')
         except:
+            #print('try broken')
             img_path_split = img_path.split('/')
+            #print(img_path_split)
             split = 'train' if self.is_train else 'test'
-            img_path = '/'.join(img_path_split[:2] + [split] + img_path_split[2:])
+            #print(f'split : {split}')
+            #img_path = '/'.join(img_path_split[:2] + [split] + img_path_split[2:])
+            img_path = '/'.join(img_path_split[:2]+ img_path_split[2:])
+            #print(img_path)
             img = Image.open(img_path).convert('RGB')
 
         class_label = img_data['class_label']
+        random.seed(self.seed) 
+        torch.manual_seed(self.seed)
         if self.transform:
             img = self.transform(img)
 
@@ -127,7 +143,7 @@ class ImbalancedDatasetSampler(torch.utils.data.sampler.Sampler):
     def __len__(self):
         return self.num_samples
 
-def load_data(pkl_paths, use_attr, no_img, batch_size, uncertain_label=False, n_class_attr=2, image_dir='images', resampling=False, resol=299):
+def load_data(pkl_paths, use_attr, no_img, batch_size, uncertain_label=False, n_class_attr=2, image_dir=f'{BASE_DIR}/CUB_200_2011', resampling=False, resol=299, seed=0, override_train=False):
     """
     Note: Inception needs (299,299,3) images with inputs scaled between -1 and 1
     Loads data with transformations applied, and upsample the minority class if there is class imbalance and weighted loss is not used
@@ -135,7 +151,7 @@ def load_data(pkl_paths, use_attr, no_img, batch_size, uncertain_label=False, n_
     """
     resized_resol = int(resol * 256/224)
     is_training = any(['train.pkl' in f for f in pkl_paths])
-    if is_training:
+    if is_training and not override_train:
         transform = transforms.Compose([
             #transforms.Resize((resized_resol, resized_resol)),
             #transforms.RandomSizedCrop(resol),
@@ -155,7 +171,7 @@ def load_data(pkl_paths, use_attr, no_img, batch_size, uncertain_label=False, n_
             #transforms.Normalize(mean = [ 0.485, 0.456, 0.406 ], std = [ 0.229, 0.224, 0.225 ]),
             ])
 
-    dataset = CUBDataset(pkl_paths, use_attr, no_img, uncertain_label, image_dir, n_class_attr, transform)
+    dataset = CUBDataset(pkl_paths, use_attr, no_img, uncertain_label, image_dir, n_class_attr, transform, seed)
     if is_training:
         drop_last = True
         shuffle = True
@@ -176,7 +192,9 @@ def find_class_imbalance(pkl_file, multiple_attr=False, attr_idx=-1):
     If multiple_attr is True, then return imbalance ratio separately for each attribute. Else, calculate the overall imbalance across all attributes
     """
     imbalance_ratio = []
+    #print(os.path.join(BASE_DIR, pkl_file))
     data = pickle.load(open(os.path.join(BASE_DIR, pkl_file), 'rb'))
+    #data = pickle.load(open('/home/mattyshen/iCBM/'+pkl_file, 'rb'))
     n = len(data)
     n_attr = len(data[0]['attribute_label'])
     if attr_idx >= 0:
